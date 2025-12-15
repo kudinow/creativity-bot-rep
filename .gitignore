@@ -13,7 +13,7 @@ yarn-error.log*
 database.db
 database.db-shm
 database.db-wal
-data/
+# data/
 
 # Логи
 logs/
