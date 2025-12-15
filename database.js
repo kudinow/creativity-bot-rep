@@ -38,10 +38,24 @@ const initDatabase = () => {
         question_id INTEGER NOT NULL,
         answers_count INTEGER DEFAULT 0,
         is_completed INTEGER DEFAULT 0,
+        question_changes_count INTEGER DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (question_id) REFERENCES questions(id)
       )
     `);
+
+    // Миграция: добавляем поле question_changes_count, если его нет
+    try {
+      const columns = db.pragma('table_info(daily_progress)');
+      const hasChangesCount = columns.some(col => col.name === 'question_changes_count');
+      
+      if (!hasChangesCount) {
+        db.exec('ALTER TABLE daily_progress ADD COLUMN question_changes_count INTEGER DEFAULT 0');
+        console.log('[БД] Добавлено поле question_changes_count в таблицу daily_progress');
+      }
+    } catch (error) {
+      // Игнорируем ошибку, если таблица не существует
+    }
 
     console.log('[БД] Таблицы успешно созданы');
   } catch (error) {
@@ -123,11 +137,22 @@ const getRandomQuestion = () => {
   }
 };
 
+// Получение случайного вопроса, исключая указанный
+const getRandomQuestionExcept = (excludeQuestionId) => {
+  try {
+    const stmt = db.prepare('SELECT * FROM questions WHERE id != ? ORDER BY RANDOM() LIMIT 1');
+    return stmt.get(excludeQuestionId);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении случайного вопроса:', error);
+    return null;
+  }
+};
+
 // Создание записи прогресса на день
 const createDailyProgress = (userId, date, questionId) => {
   try {
     const stmt = db.prepare(
-      'INSERT INTO daily_progress (user_id, date, question_id, answers_count, is_completed) VALUES (?, ?, ?, 0, 0)'
+      'INSERT INTO daily_progress (user_id, date, question_id, answers_count, is_completed, question_changes_count) VALUES (?, ?, ?, 0, 0, 0)'
     );
     const result = stmt.run(userId, date, questionId);
     return result.lastInsertRowid;
@@ -179,6 +204,28 @@ const markDayCompleted = (progressId, userId) => {
   }
 };
 
+// Смена вопроса для текущего дня
+const changeQuestionForToday = (progressId, newQuestionId) => {
+  try {
+    const update = db.transaction(() => {
+      // Обновляем вопрос, сбрасываем счётчик ответов и увеличиваем счётчик смен
+      db.prepare(`
+        UPDATE daily_progress 
+        SET question_id = ?, 
+            answers_count = 0, 
+            question_changes_count = question_changes_count + 1 
+        WHERE id = ?
+      `).run(newQuestionId, progressId);
+    });
+    update();
+    console.log(`[БД] Вопрос изменён для записи прогресса ${progressId}`);
+    return true;
+  } catch (error) {
+    console.error('[ERROR] Ошибка при смене вопроса:', error);
+    return false;
+  }
+};
+
 // Закрытие дня и подсчёт пропусков
 const closeDay = (date) => {
   try {
@@ -211,9 +258,11 @@ module.exports = {
   getUser,
   getAllUsers,
   getRandomQuestion,
+  getRandomQuestionExcept,
   createDailyProgress,
   getTodayProgress,
   updateAnswersCount,
   markDayCompleted,
+  changeQuestionForToday,
   closeDay
 };
