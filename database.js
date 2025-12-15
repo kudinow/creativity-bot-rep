@@ -49,22 +49,29 @@ const initDatabase = () => {
   }
 };
 
-// Загрузка вопросов в базу данных (выполняется только один раз)
+// Загрузка вопросов в базу данных (добавляет только новые вопросы)
 const seedQuestions = () => {
   try {
-    const count = db.prepare('SELECT COUNT(*) as count FROM questions').get();
+    // Получаем все существующие вопросы из БД
+    const existingQuestions = db.prepare('SELECT text FROM questions').all();
+    const existingTexts = new Set(existingQuestions.map(q => q.text));
     
-    if (count.count === 0) {
-      const insert = db.prepare('INSERT INTO questions (text) VALUES (?)');
-      const insertMany = db.transaction((questions) => {
-        for (const question of questions) {
-          insert.run(question);
-        }
-      });
-      
-      insertMany(questionsData);
-      console.log(`[БД] Загружено ${questionsData.length} вопросов`);
+    // Готовим запрос на вставку
+    const insert = db.prepare('INSERT INTO questions (text) VALUES (?)');
+    let addedCount = 0;
+    
+    // Добавляем только те вопросы, которых ещё нет в БД
+    for (const question of questionsData) {
+      if (!existingTexts.has(question)) {
+        insert.run(question);
+        addedCount++;
+      }
     }
+    
+    if (addedCount > 0) {
+      console.log(`[БД] Добавлено новых вопросов: ${addedCount}`);
+    }
+    console.log(`[БД] Всего вопросов в базе: ${existingTexts.size + addedCount}`);
   } catch (error) {
     console.error('[ERROR] Ошибка при загрузке вопросов:', error);
   }
