@@ -126,15 +126,135 @@ bot.onText(/\/stats/, async (msg) => {
       return;
     }
     
+    const streakInfo = db.getUserStreakInfo(telegramId);
+    const currentStreak = streakInfo ? streakInfo.currentStreak : 0;
+    const bestStreak = streakInfo ? streakInfo.bestStreak : 0;
+    
     await bot.sendMessage(
       telegramId,
-      `📊 Твоя статистика:\n✅ Выполнено дней: ${user.completed_days}\n❌ Пропущено дней: ${user.missed_days}`
+      `📊 Твоя статистика:\n\n` +
+      `✅ Выполнено дней: ${user.completed_days}\n` +
+      `❌ Пропущено дней: ${user.missed_days}\n\n` +
+      `🔥 Текущая серия: ${currentStreak} ${getDaysWord(currentStreak)}\n` +
+      `🏆 Лучшая серия: ${bestStreak} ${getDaysWord(bestStreak)}\n\n` +
+      `Используй /streak для подробностей о сериях и бейджах`
     );
   } catch (error) {
     console.error('[ERROR] Ошибка при обработке /stats:', error);
     await bot.sendMessage(telegramId, 'Произошла ошибка. Попробуйте ещё раз.');
   }
 });
+
+// Обработчик команды /streak
+bot.onText(/\/streak/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  try {
+    const user = db.getUser(telegramId);
+    
+    if (!user) {
+      await bot.sendMessage(telegramId, 'Сначала используй команду /start');
+      return;
+    }
+    
+    const streakInfo = db.getUserStreakInfo(telegramId);
+    
+    if (!streakInfo) {
+      await bot.sendMessage(telegramId, 'Не удалось получить информацию о сериях');
+      return;
+    }
+    
+    const { currentStreak, bestStreak, badges } = streakInfo;
+    const allBadges = db.getAllBadges();
+    
+    // Формируем сообщение о сериях
+    let message = `🔥 Твои серии:\n\n`;
+    message += `📈 Текущая серия: ${currentStreak} ${getDaysWord(currentStreak)}\n`;
+    message += `🏆 Лучшая серия: ${bestStreak} ${getDaysWord(bestStreak)}\n\n`;
+    
+    // Добавляем информацию о бейджах
+    message += `🎖 Твои бейджи:\n`;
+    
+    if (badges.length > 0) {
+      for (const badge of badges) {
+        const earnedDate = new Date(badge.earned_at).toLocaleDateString('ru-RU');
+        message += `${badge.emoji} ${badge.name} — ${badge.description} (получен ${earnedDate})\n`;
+      }
+    } else {
+      message += `У тебя пока нет бейджей\n`;
+    }
+    
+    // Показываем следующий бейдж
+    message += `\n🎯 Следующие цели:\n`;
+    const earnedBadgeIds = new Set(badges.map(b => b.id));
+    const nextBadges = allBadges.filter(b => !earnedBadgeIds.has(b.id));
+    
+    if (nextBadges.length > 0) {
+      const nextBadge = nextBadges[0];
+      const remaining = nextBadge.requirement - currentStreak;
+      message += `${nextBadge.emoji} ${nextBadge.name} — ${nextBadge.description}`;
+      if (remaining > 0) {
+        message += ` (ещё ${remaining} ${getDaysWord(remaining)})`;
+      }
+      message += `\n`;
+      
+      // Показываем остальные будущие бейджи
+      for (let i = 1; i < nextBadges.length; i++) {
+        const badge = nextBadges[i];
+        message += `${badge.emoji} ${badge.name} — ${badge.description}\n`;
+      }
+    } else {
+      message += `🎉 Ты получил все бейджи! Поздравляем!\n`;
+    }
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /streak:', error);
+    await bot.sendMessage(telegramId, 'Произошла ошибка. Попробуйте ещё раз.');
+  }
+});
+
+// Обработчик команды /help
+bot.onText(/\/help/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  const helpMessage = `📖 Справка по командам:\n\n` +
+    `/start — Начать работу или получить вопрос дня\n` +
+    `/stats — Показать статистику выполнения\n` +
+    `/streak — Показать текущие серии и бейджи\n` +
+    `/help — Показать эту справку\n\n` +
+    `💡 Как это работает:\n` +
+    `Каждый день ты получаешь вопрос и должен придумать 10 вариантов ответа. ` +
+    `Можно отправлять по одному или списком. ` +
+    `Выполняй задания каждый день, чтобы увеличить свою серию и получать бейджи!\n\n` +
+    `🎖 Бейджи за серии:\n` +
+    `🔥 Новичок — 3 дня подряд\n` +
+    `🌟 Энтузиаст — 7 дней подряд\n` +
+    `💎 Мастер — 30 дней подряд\n` +
+    `👑 Легенда — 100 дней подряд`;
+  
+  await bot.sendMessage(telegramId, helpMessage);
+});
+
+// Вспомогательная функция для склонения слова "день"
+const getDaysWord = (count) => {
+  const lastDigit = count % 10;
+  const lastTwoDigits = count % 100;
+  
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
+    return 'дней';
+  }
+  
+  if (lastDigit === 1) {
+    return 'день';
+  }
+  
+  if (lastDigit >= 2 && lastDigit <= 4) {
+    return 'дня';
+  }
+  
+  return 'дней';
+};
 
 // Обработчик нажатий на inline-кнопки
 bot.on('callback_query', async (query) => {
@@ -285,11 +405,30 @@ bot.on('message', async (msg) => {
     
     // Проверяем, достигли ли мы 10 ответов
     if (totalAnswers >= 10) {
+      // Отмечаем день как завершённый (это обновит стрики)
       db.markDayCompleted(progress.id, user.id);
-      await bot.sendMessage(
-        telegramId, 
-        `${progressBar}\n\n✅ Отлично! Ты выполнил задание на сегодня!\nЗавтра будет новый вопрос.`
-      );
+      
+      // Получаем обновлённую информацию о пользователе
+      const updatedUser = db.getUser(telegramId);
+      const currentStreak = updatedUser.current_streak || 0;
+      
+      // Проверяем, получил ли пользователь новые бейджи
+      const newBadges = db.checkAndAwardBadges(updatedUser.id, currentStreak);
+      
+      let completionMessage = `${progressBar}\n\n✅ Отлично! Ты выполнил задание на сегодня!\n`;
+      completionMessage += `🔥 Серия: ${currentStreak} ${getDaysWord(currentStreak)}\n`;
+      
+      // Если есть новые бейджи - объявляем о них
+      if (newBadges.length > 0) {
+        completionMessage += `\n🎉 Новое достижение!\n`;
+        for (const badge of newBadges) {
+          completionMessage += `${badge.emoji} ${badge.name} — ${badge.description}\n`;
+        }
+      }
+      
+      completionMessage += `\nЗавтра будет новый вопрос.`;
+      
+      await bot.sendMessage(telegramId, completionMessage);
     } else {
       // Получаем обновленный прогресс для актуального значения question_changes_count
       const updatedProgress = db.getTodayProgress(telegramId);
@@ -316,6 +455,7 @@ bot.on('polling_error', (error) => {
 console.log('[БОТ] Инициализация...');
 db.initDatabase();
 db.seedQuestions();
+db.seedBadges();
 startScheduler(bot, db);
 
 // Запуск бота
