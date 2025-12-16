@@ -349,6 +349,46 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, {
         text: `Вопрос изменён! Осталось смен: ${3 - newChangesCount}`
       });
+    } else if (query.data === 'bonus_question') {
+      const user = db.getUser(telegramId);
+      
+      if (!user) {
+        await bot.answerCallbackQuery(query.id, {
+          text: 'Сначала используй команду /start',
+          show_alert: true
+        });
+        return;
+      }
+      
+      // Получаем случайный вопрос для бонусной тренировки
+      const bonusQuestion = db.getRandomQuestion();
+      
+      if (!bonusQuestion) {
+        await bot.answerCallbackQuery(query.id, {
+          text: 'Не удалось получить вопрос. Попробуй позже.',
+          show_alert: true
+        });
+        return;
+      }
+      
+      // Удаляем старое сообщение с кнопкой
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (e) {
+        // Игнорируем ошибку, если сообщение уже удалено
+      }
+      
+      const progressBar = generateProgressBar(0);
+      
+      // Отправляем бонусный вопрос без кнопки смены (это просто тренировка)
+      await bot.sendMessage(
+        telegramId,
+        `🎯 Бонусный вопрос для тренировки:\n\n${bonusQuestion.text}\n\n${progressBar}\n\nПришли 10 ответов. Это не влияет на статистику - просто для практики!`
+      );
+      
+      await bot.answerCallbackQuery(query.id, {
+        text: 'Держи новый вопрос для тренировки!'
+      });
     }
   } catch (error) {
     console.error('[ERROR] Ошибка при обработке callback_query:', error);
@@ -387,9 +427,34 @@ bot.on('message', async (msg) => {
       progress = db.getTodayProgress(telegramId);
     }
     
-    // Если день уже завершён - игнорируем
+    // Если день уже завершён - считаем как бонусную тренировку
     if (progress.is_completed) {
-      await bot.sendMessage(telegramId, 'Принято. Завтра будет новый вопрос.');
+      // Подсчитываем ответы для бонусной тренировки (не сохраняем в БД)
+      const bonusAnswers = countAnswers(msg.text);
+      const progressBar = generateProgressBar(bonusAnswers);
+      
+      if (bonusAnswers >= 10) {
+        // Кнопка для получения ещё одного бонусного вопроса
+        const bonusKeyboard = {
+          inline_keyboard: [[
+            {
+              text: '🎯 Получить новый вопрос',
+              callback_data: 'bonus_question'
+            }
+          ]]
+        };
+        
+        await bot.sendMessage(
+          telegramId, 
+          `${progressBar}\n\n✅ Отлично! Ещё 10 ответов!\n\nХочешь продолжить тренировку?`,
+          { reply_markup: bonusKeyboard }
+        );
+      } else {
+        await bot.sendMessage(
+          telegramId, 
+          `${progressBar}\n\nПринято ответов: ${bonusAnswers}/10\nПродолжай тренироваться! Осталось ${10 - bonusAnswers}.`
+        );
+      }
       return;
     }
     
@@ -428,7 +493,17 @@ bot.on('message', async (msg) => {
       
       completionMessage += `\nЗавтра будет новый вопрос.`;
       
-      await bot.sendMessage(telegramId, completionMessage);
+      // Кнопка для получения бонусного вопроса
+      const bonusKeyboard = {
+        inline_keyboard: [[
+          {
+            text: '🎯 Получить новый вопрос',
+            callback_data: 'bonus_question'
+          }
+        ]]
+      };
+      
+      await bot.sendMessage(telegramId, completionMessage, { reply_markup: bonusKeyboard });
     } else {
       // Получаем обновленный прогресс для актуального значения question_changes_count
       const updatedProgress = db.getTodayProgress(telegramId);
