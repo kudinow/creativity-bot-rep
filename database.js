@@ -107,6 +107,17 @@ const initDatabase = () => {
       )
     `);
 
+    // Таблица предложенных вопросов от пользователей
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS suggested_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        question_text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+
     console.log('[БД] Таблицы успешно созданы');
   } catch (error) {
     console.error('[ERROR] Ошибка при создании таблиц:', error);
@@ -439,6 +450,326 @@ const getUserStreakInfo = (telegramId) => {
   }
 };
 
+// Добавление предложенного вопроса от пользователя
+const addSuggestedQuestion = (userId, questionText) => {
+  try {
+    const stmt = db.prepare('INSERT INTO suggested_questions (user_id, question_text, created_at) VALUES (?, ?, ?)');
+    const result = stmt.run(userId, questionText, new Date().toISOString());
+    console.log(`[БД] Добавлен предложенный вопрос от пользователя ${userId}`);
+    return result.lastInsertRowid;
+  } catch (error) {
+    console.error('[ERROR] Ошибка при добавлении предложенного вопроса:', error);
+    return null;
+  }
+};
+
+// ===== АДМИНИСТРАТИВНЫЕ ФУНКЦИИ =====
+
+// Получение общей статистики системы
+const getSystemStats = () => {
+  try {
+    const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+    const activeToday = db.prepare(`
+      SELECT COUNT(DISTINCT user_id) as count 
+      FROM daily_progress 
+      WHERE date = ? AND is_completed = 1
+    `).get(new Date().toISOString().split('T')[0]).count;
+    
+    const activeWeek = db.prepare(`
+      SELECT COUNT(DISTINCT user_id) as count 
+      FROM daily_progress 
+      WHERE date >= date('now', '-7 days') AND is_completed = 1
+    `).get().count;
+    
+    const activeMonth = db.prepare(`
+      SELECT COUNT(DISTINCT user_id) as count 
+      FROM daily_progress 
+      WHERE date >= date('now', '-30 days') AND is_completed = 1
+    `).get().count;
+    
+    const totalCompleted = db.prepare('SELECT SUM(completed_days) as total FROM users').get().total || 0;
+    const totalMissed = db.prepare('SELECT SUM(missed_days) as total FROM users').get().total || 0;
+    const completionRate = totalCompleted + totalMissed > 0 
+      ? ((totalCompleted / (totalCompleted + totalMissed)) * 100).toFixed(1) 
+      : 0;
+    
+    const topStreaks = db.prepare(`
+      SELECT telegram_id, current_streak, best_streak 
+      FROM users 
+      WHERE current_streak > 0 
+      ORDER BY current_streak DESC 
+      LIMIT 5
+    `).all();
+    
+    const totalQuestions = db.prepare('SELECT COUNT(*) as count FROM questions').get().count;
+    const pendingSuggestions = db.prepare('SELECT COUNT(*) as count FROM suggested_questions').get().count;
+    
+    return {
+      totalUsers,
+      activeToday,
+      activeWeek,
+      activeMonth,
+      totalCompleted,
+      totalMissed,
+      completionRate,
+      topStreaks,
+      totalQuestions,
+      pendingSuggestions
+    };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении статистики системы:', error);
+    return null;
+  }
+};
+
+// Получение списка всех пользователей с сортировкой
+const getAllUsersWithDetails = (sortBy = 'created_at', order = 'DESC', limit = 50) => {
+  try {
+    const validSorts = ['created_at', 'current_streak', 'best_streak', 'completed_days', 'last_completed_date'];
+    const validOrders = ['ASC', 'DESC'];
+    
+    if (!validSorts.includes(sortBy)) sortBy = 'created_at';
+    if (!validOrders.includes(order)) order = 'DESC';
+    
+    const stmt = db.prepare(`
+      SELECT * FROM users 
+      ORDER BY ${sortBy} ${order} 
+      LIMIT ?
+    `);
+    return stmt.all(limit);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении списка пользователей:', error);
+    return [];
+  }
+};
+
+// Получение детальной информации о пользователе
+const getUserDetails = (telegramId) => {
+  try {
+    const user = getUser(telegramId);
+    if (!user) return null;
+    
+    // История за последние 30 дней
+    const history = db.prepare(`
+      SELECT date, question_id, answers_count, is_completed, question_changes_count
+      FROM daily_progress
+      WHERE user_id = ? AND date >= date('now', '-30 days')
+      ORDER BY date DESC
+    `).all(user.id);
+    
+    // Бейджи
+    const badges = getUserBadges(user.id);
+    
+    // Общее количество смен вопросов
+    const totalChanges = db.prepare(`
+      SELECT SUM(question_changes_count) as total
+      FROM daily_progress
+      WHERE user_id = ?
+    `).get(user.id).total || 0;
+    
+    return {
+      user,
+      history,
+      badges,
+      totalChanges
+    };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении деталей пользователя:', error);
+    return null;
+  }
+};
+
+// Статистика по вопросам
+const getQuestionsStats = () => {
+  try {
+    // Количество использований каждого вопроса
+    const questionUsage = db.prepare(`
+      SELECT q.id, q.text, COUNT(dp.id) as usage_count,
+             SUM(dp.question_changes_count) as total_changes
+      FROM questions q
+      LEFT JOIN daily_progress dp ON q.id = dp.question_id
+      GROUP BY q.id
+      ORDER BY usage_count DESC
+    `).all();
+    
+    const totalQuestions = db.prepare('SELECT COUNT(*) as count FROM questions').get().count;
+    
+    // Самые популярные (меньше всего смен)
+    const mostPopular = questionUsage
+      .filter(q => q.usage_count > 0)
+      .sort((a, b) => (a.total_changes / a.usage_count) - (b.total_changes / b.usage_count))
+      .slice(0, 5);
+    
+    // Самые непопулярные (больше всего смен)
+    const leastPopular = questionUsage
+      .filter(q => q.usage_count > 0)
+      .sort((a, b) => (b.total_changes / b.usage_count) - (a.total_changes / a.usage_count))
+      .slice(0, 5);
+    
+    // Вопросы, которые давно не показывались
+    const unused = questionUsage
+      .filter(q => q.usage_count === 0)
+      .length;
+    
+    return {
+      totalQuestions,
+      mostPopular,
+      leastPopular,
+      unusedCount: unused
+    };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении статистики вопросов:', error);
+    return null;
+  }
+};
+
+// Добавление нового вопроса
+const addQuestion = (questionText) => {
+  try {
+    const stmt = db.prepare('INSERT INTO questions (text) VALUES (?)');
+    const result = stmt.run(questionText);
+    console.log(`[БД] Добавлен новый вопрос: ${questionText}`);
+    return result.lastInsertRowid;
+  } catch (error) {
+    console.error('[ERROR] Ошибка при добавлении вопроса:', error);
+    return null;
+  }
+};
+
+// Удаление вопроса
+const deleteQuestion = (questionId) => {
+  try {
+    // Проверяем, используется ли вопрос
+    const usage = db.prepare('SELECT COUNT(*) as count FROM daily_progress WHERE question_id = ?').get(questionId).count;
+    
+    if (usage > 0) {
+      return { success: false, message: 'Вопрос используется в истории пользователей' };
+    }
+    
+    const stmt = db.prepare('DELETE FROM questions WHERE id = ?');
+    const result = stmt.run(questionId);
+    
+    if (result.changes > 0) {
+      console.log(`[БД] Удалён вопрос с ID ${questionId}`);
+      return { success: true };
+    }
+    
+    return { success: false, message: 'Вопрос не найден' };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при удалении вопроса:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
+// Редактирование вопроса
+const editQuestion = (questionId, newText) => {
+  try {
+    const stmt = db.prepare('UPDATE questions SET text = ? WHERE id = ?');
+    const result = stmt.run(newText, questionId);
+    
+    if (result.changes > 0) {
+      console.log(`[БД] Обновлён вопрос с ID ${questionId}`);
+      return { success: true };
+    }
+    
+    return { success: false, message: 'Вопрос не найден' };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при редактировании вопроса:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
+// Получение всех вопросов с пагинацией
+const getAllQuestions = (page = 1, perPage = 10) => {
+  try {
+    const offset = (page - 1) * perPage;
+    const questions = db.prepare('SELECT * FROM questions LIMIT ? OFFSET ?').all(perPage, offset);
+    const total = db.prepare('SELECT COUNT(*) as count FROM questions').get().count;
+    
+    return {
+      questions,
+      total,
+      page,
+      totalPages: Math.ceil(total / perPage)
+    };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении списка вопросов:', error);
+    return null;
+  }
+};
+
+// Поиск вопросов
+const searchQuestions = (searchText) => {
+  try {
+    const stmt = db.prepare('SELECT * FROM questions WHERE text LIKE ? LIMIT 20');
+    return stmt.all(`%${searchText}%`);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при поиске вопросов:', error);
+    return [];
+  }
+};
+
+// Получение предложенных вопросов
+const getPendingSuggestions = (limit = 20) => {
+  try {
+    const stmt = db.prepare(`
+      SELECT sq.*, u.telegram_id
+      FROM suggested_questions sq
+      JOIN users u ON sq.user_id = u.id
+      ORDER BY sq.created_at DESC
+      LIMIT ?
+    `);
+    return stmt.all(limit);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении предложенных вопросов:', error);
+    return [];
+  }
+};
+
+// Одобрение предложенного вопроса
+const approveSuggestion = (suggestionId) => {
+  try {
+    const transaction = db.transaction(() => {
+      // Получаем текст вопроса
+      const suggestion = db.prepare('SELECT question_text FROM suggested_questions WHERE id = ?').get(suggestionId);
+      
+      if (!suggestion) {
+        return { success: false, message: 'Предложение не найдено' };
+      }
+      
+      // Добавляем в основную базу
+      db.prepare('INSERT INTO questions (text) VALUES (?)').run(suggestion.question_text);
+      
+      // Удаляем из предложенных
+      db.prepare('DELETE FROM suggested_questions WHERE id = ?').run(suggestionId);
+      
+      return { success: true, text: suggestion.question_text };
+    });
+    
+    return transaction();
+  } catch (error) {
+    console.error('[ERROR] Ошибка при одобрении предложения:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
+// Отклонение предложенного вопроса
+const rejectSuggestion = (suggestionId) => {
+  try {
+    const stmt = db.prepare('DELETE FROM suggested_questions WHERE id = ?');
+    const result = stmt.run(suggestionId);
+    
+    if (result.changes > 0) {
+      return { success: true };
+    }
+    
+    return { success: false, message: 'Предложение не найдено' };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при отклонении предложения:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
 module.exports = {
   initDatabase,
   seedQuestions,
@@ -457,5 +788,19 @@ module.exports = {
   getAllBadges,
   getUserBadges,
   checkAndAwardBadges,
-  getUserStreakInfo
+  getUserStreakInfo,
+  addSuggestedQuestion,
+  // Административные функции
+  getSystemStats,
+  getAllUsersWithDetails,
+  getUserDetails,
+  getQuestionsStats,
+  addQuestion,
+  deleteQuestion,
+  editQuestion,
+  getAllQuestions,
+  searchQuestions,
+  getPendingSuggestions,
+  approveSuggestion,
+  rejectSuggestion
 };

@@ -5,6 +5,7 @@ const { startScheduler } = require('./scheduler');
 require('dotenv').config();
 
 const token = process.env.BOT_TOKEN;
+const adminIds = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];
 
 if (!token) {
   console.error('[ERROR] Токен бота не найден. Создайте .env файл с BOT_TOKEN');
@@ -12,6 +13,9 @@ if (!token) {
 }
 
 const bot = new TelegramBot(token, { polling: true });
+
+// Проверка прав администратора
+const isAdmin = (telegramId) => adminIds.includes(telegramId);
 
 // Подсчёт количества ответов в тексте
 const countAnswers = (text) => {
@@ -85,9 +89,18 @@ bot.onText(/\/start/, async (msg) => {
     // Отправляем вопрос дня
     if (progress.is_completed) {
       const progressBar = generateProgressBar(10);
+      const bonusKeyboard = {
+        inline_keyboard: [[
+          {
+            text: '🎯 Получить бонусный вопрос',
+            callback_data: 'bonus_question'
+          }
+        ]]
+      };
       await bot.sendMessage(
         telegramId,
-        `Вопрос дня: ${progress.question_text}\n\n${progressBar}\n\n✅ Ты уже выполнил задание на сегодня! Завтра будет новый вопрос.`
+        `Вопрос дня: ${progress.question_text}\n\n${progressBar}\n\n✅ Ты уже выполнил задание на сегодня! Завтра будет новый вопрос.`,
+        { reply_markup: bonusKeyboard }
       );
     } else {
       const progressBar = generateProgressBar(progress.answers_count);
@@ -222,6 +235,7 @@ bot.onText(/\/help/, async (msg) => {
     `/start — Начать работу или получить вопрос дня\n` +
     `/stats — Показать статистику выполнения\n` +
     `/streak — Показать текущие серии и бейджи\n` +
+    `/suggest — Предложить свой вопрос\n` +
     `/help — Показать эту справку\n\n` +
     `💡 Как это работает:\n` +
     `Каждый день ты получаешь вопрос и должен придумать 10 вариантов ответа. ` +
@@ -234,6 +248,459 @@ bot.onText(/\/help/, async (msg) => {
     `👑 Легенда — 100 дней подряд`;
   
   await bot.sendMessage(telegramId, helpMessage);
+});
+
+// Состояние для ожидания предложенного вопроса
+const waitingForSuggestion = new Set();
+
+// Обработчик команды /suggest
+bot.onText(/\/suggest/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  try {
+    const user = db.getUser(telegramId);
+    
+    if (!user) {
+      await bot.sendMessage(telegramId, 'Сначала используй команду /start');
+      return;
+    }
+    
+    waitingForSuggestion.add(telegramId);
+    await bot.sendMessage(
+      telegramId,
+      '💡 Отлично! Напиши свой вариант вопроса.\n\nНапример: "10 способов провести выходной с пользой"\n\nДля отмены отправь /cancel'
+    );
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /suggest:', error);
+    await bot.sendMessage(telegramId, 'Произошла ошибка. Попробуйте ещё раз.');
+  }
+});
+
+// Обработчик команды /cancel
+bot.onText(/\/cancel/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (waitingForSuggestion.has(telegramId)) {
+    waitingForSuggestion.delete(telegramId);
+    await bot.sendMessage(telegramId, '❌ Предложение вопроса отменено.');
+  } else {
+    await bot.sendMessage(telegramId, 'Нет активных действий для отмены.');
+  }
+});
+
+// ===== АДМИНИСТРАТИВНЫЕ КОМАНДЫ =====
+
+// Общая статистика системы
+bot.onText(/\/admin_stats/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const stats = db.getSystemStats();
+    
+    if (!stats) {
+      await bot.sendMessage(telegramId, '❌ Не удалось получить статистику.');
+      return;
+    }
+    
+    let message = `📊 Статистика системы\n\n`;
+    message += `👥 Всего пользователей: ${stats.totalUsers}\n`;
+    message += `✅ Активные сегодня: ${stats.activeToday}\n`;
+    message += `📅 Активные за неделю: ${stats.activeWeek}\n`;
+    message += `📆 Активные за месяц: ${stats.activeMonth}\n\n`;
+    message += `✅ Выполнено заданий: ${stats.totalCompleted}\n`;
+    message += `❌ Пропущено заданий: ${stats.totalMissed}\n`;
+    message += `📈 Процент выполнения: ${stats.completionRate}%\n\n`;
+    message += `❓ Вопросов в базе: ${stats.totalQuestions}\n`;
+    message += `💡 Предложений от пользователей: ${stats.pendingSuggestions}\n\n`;
+    
+    if (stats.topStreaks.length > 0) {
+      message += `🔥 Топ серий:\n`;
+      stats.topStreaks.forEach((user, idx) => {
+        message += `${idx + 1}. ID ${user.telegram_id}: ${user.current_streak} дней (рекорд: ${user.best_streak})\n`;
+      });
+    }
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_stats:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Список пользователей
+bot.onText(/\/admin_users(?:\s+(.+))?/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const params = match[1] ? match[1].split(' ') : [];
+    const sortBy = params[0] || 'created_at';
+    const order = params[1] || 'DESC';
+    
+    const users = db.getAllUsersWithDetails(sortBy, order, 20);
+    
+    if (users.length === 0) {
+      await bot.sendMessage(telegramId, 'Пользователей не найдено.');
+      return;
+    }
+    
+    let message = `👥 Список пользователей (топ 20):\n\n`;
+    
+    users.forEach((user, idx) => {
+      const lastActive = user.last_completed_date || 'никогда';
+      message += `${idx + 1}. ID: ${user.telegram_id}\n`;
+      message += `   🔥 Серия: ${user.current_streak} | Рекорд: ${user.best_streak}\n`;
+      message += `   ✅ Выполнено: ${user.completed_days} | ❌ Пропущено: ${user.missed_days}\n`;
+      message += `   📅 Последняя активность: ${lastActive}\n\n`;
+    });
+    
+    message += `\nИспользуйте /admin_user <telegram_id> для деталей`;
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_users:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Детальная информация о пользователе
+bot.onText(/\/admin_user\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const targetUserId = parseInt(match[1]);
+    const details = db.getUserDetails(targetUserId);
+    
+    if (!details) {
+      await bot.sendMessage(telegramId, '❌ Пользователь не найден.');
+      return;
+    }
+    
+    const { user, history, badges, totalChanges } = details;
+    
+    let message = `👤 Пользователь ${user.telegram_id}\n\n`;
+    message += `📅 Регистрация: ${new Date(user.created_at).toLocaleDateString('ru-RU')}\n`;
+    message += `📅 Последняя активность: ${user.last_completed_date || 'никогда'}\n\n`;
+    message += `🔥 Текущая серия: ${user.current_streak}\n`;
+    message += `🏆 Лучшая серия: ${user.best_streak}\n`;
+    message += `✅ Выполнено дней: ${user.completed_days}\n`;
+    message += `❌ Пропущено дней: ${user.missed_days}\n`;
+    message += `🔄 Всего смен вопросов: ${totalChanges}\n\n`;
+    
+    if (badges.length > 0) {
+      message += `🎖 Бейджи:\n`;
+      badges.forEach(badge => {
+        message += `${badge.emoji} ${badge.name}\n`;
+      });
+      message += `\n`;
+    }
+    
+    if (history.length > 0) {
+      message += `📊 История за последние 7 дней:\n`;
+      history.slice(0, 7).forEach(day => {
+        const status = day.is_completed ? '✅' : '⏳';
+        message += `${status} ${day.date}: ${day.answers_count}/10 ответов\n`;
+      });
+    }
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_user:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Статистика по вопросам
+bot.onText(/\/admin_questions_stats/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const stats = db.getQuestionsStats();
+    
+    if (!stats) {
+      await bot.sendMessage(telegramId, '❌ Не удалось получить статистику.');
+      return;
+    }
+    
+    let message = `📊 Статистика вопросов\n\n`;
+    message += `❓ Всего вопросов: ${stats.totalQuestions}\n`;
+    message += `💤 Неиспользованных: ${stats.unusedCount}\n\n`;
+    
+    if (stats.mostPopular.length > 0) {
+      message += `⭐ Самые популярные (меньше смен):\n`;
+      stats.mostPopular.forEach((q, idx) => {
+        const changeRate = (q.total_changes / q.usage_count).toFixed(2);
+        message += `${idx + 1}. ID ${q.id}: ${changeRate} смен/использование\n`;
+        message += `   "${q.text.substring(0, 50)}..."\n`;
+      });
+      message += `\n`;
+    }
+    
+    if (stats.leastPopular.length > 0) {
+      message += `👎 Самые непопулярные (больше смен):\n`;
+      stats.leastPopular.forEach((q, idx) => {
+        const changeRate = (q.total_changes / q.usage_count).toFixed(2);
+        message += `${idx + 1}. ID ${q.id}: ${changeRate} смен/использование\n`;
+        message += `   "${q.text.substring(0, 50)}..."\n`;
+      });
+    }
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_questions_stats:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Добавление нового вопроса
+bot.onText(/\/admin_add_question\s+(.+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const questionText = match[1].trim();
+    
+    if (questionText.length < 10) {
+      await bot.sendMessage(telegramId, '❌ Вопрос слишком короткий (минимум 10 символов).');
+      return;
+    }
+    
+    const id = db.addQuestion(questionText);
+    
+    if (id) {
+      await bot.sendMessage(telegramId, `✅ Вопрос добавлен с ID ${id}:\n"${questionText}"`);
+    } else {
+      await bot.sendMessage(telegramId, '❌ Не удалось добавить вопрос.');
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_add_question:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Удаление вопроса
+bot.onText(/\/admin_delete_question\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const questionId = parseInt(match[1]);
+    const result = db.deleteQuestion(questionId);
+    
+    if (result.success) {
+      await bot.sendMessage(telegramId, `✅ Вопрос с ID ${questionId} удалён.`);
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_delete_question:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Редактирование вопроса
+bot.onText(/\/admin_edit_question\s+(\d+)\s+(.+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const questionId = parseInt(match[1]);
+    const newText = match[2].trim();
+    
+    if (newText.length < 10) {
+      await bot.sendMessage(telegramId, '❌ Вопрос слишком короткий (минимум 10 символов).');
+      return;
+    }
+    
+    const result = db.editQuestion(questionId, newText);
+    
+    if (result.success) {
+      await bot.sendMessage(telegramId, `✅ Вопрос с ID ${questionId} обновлён:\n"${newText}"`);
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_edit_question:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Список всех вопросов
+bot.onText(/\/admin_list_questions(?:\s+(\d+))?/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const page = match[1] ? parseInt(match[1]) : 1;
+    const result = db.getAllQuestions(page, 10);
+    
+    if (!result || result.questions.length === 0) {
+      await bot.sendMessage(telegramId, 'Вопросов не найдено.');
+      return;
+    }
+    
+    let message = `📝 Список вопросов (стр. ${result.page}/${result.totalPages}):\n\n`;
+    
+    result.questions.forEach((q) => {
+      message += `ID ${q.id}: ${q.text}\n\n`;
+    });
+    
+    if (result.totalPages > 1) {
+      message += `Используйте /admin_list_questions <номер_страницы>`;
+    }
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_list_questions:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Поиск вопроса
+bot.onText(/\/admin_search_question\s+(.+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const searchText = match[1].trim();
+    const questions = db.searchQuestions(searchText);
+    
+    if (questions.length === 0) {
+      await bot.sendMessage(telegramId, 'Вопросов не найдено.');
+      return;
+    }
+    
+    let message = `🔍 Найдено вопросов: ${questions.length}\n\n`;
+    
+    questions.forEach((q) => {
+      message += `ID ${q.id}: ${q.text}\n\n`;
+    });
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_search_question:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Предложенные вопросы
+bot.onText(/\/admin_pending_questions/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const suggestions = db.getPendingSuggestions(10);
+    
+    if (suggestions.length === 0) {
+      await bot.sendMessage(telegramId, 'Нет предложенных вопросов.');
+      return;
+    }
+    
+    let message = `💡 Предложенные вопросы:\n\n`;
+    
+    suggestions.forEach((s) => {
+      const date = new Date(s.created_at).toLocaleDateString('ru-RU');
+      message += `ID ${s.id} от пользователя ${s.telegram_id} (${date}):\n`;
+      message += `"${s.question_text}"\n`;
+      message += `/admin_approve_question ${s.id} | /admin_reject_question ${s.id}\n\n`;
+    });
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_pending_questions:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Одобрение предложенного вопроса
+bot.onText(/\/admin_approve_question\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const suggestionId = parseInt(match[1]);
+    const result = db.approveSuggestion(suggestionId);
+    
+    if (result.success) {
+      await bot.sendMessage(telegramId, `✅ Вопрос одобрен и добавлен в базу:\n"${result.text}"`);
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_approve_question:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Отклонение предложенного вопроса
+bot.onText(/\/admin_reject_question\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const suggestionId = parseInt(match[1]);
+    const result = db.rejectSuggestion(suggestionId);
+    
+    if (result.success) {
+      await bot.sendMessage(telegramId, `✅ Предложение с ID ${suggestionId} отклонено.`);
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_reject_question:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
 });
 
 // Вспомогательная функция для склонения слова "день"
@@ -413,6 +880,34 @@ bot.on('message', async (msg) => {
     
     if (!user) {
       await bot.sendMessage(telegramId, 'Сначала используй команду /start');
+      return;
+    }
+    
+    // Проверяем, ожидается ли предложенный вопрос
+    if (waitingForSuggestion.has(telegramId)) {
+      const questionText = msg.text.trim();
+      
+      if (questionText.length < 10) {
+        await bot.sendMessage(telegramId, '❌ Вопрос слишком короткий. Попробуй сформулировать подробнее (минимум 10 символов).');
+        return;
+      }
+      
+      if (questionText.length > 200) {
+        await bot.sendMessage(telegramId, '❌ Вопрос слишком длинный. Постарайся уложиться в 200 символов.');
+        return;
+      }
+      
+      const result = db.addSuggestedQuestion(user.id, questionText);
+      waitingForSuggestion.delete(telegramId);
+      
+      if (result) {
+        await bot.sendMessage(
+          telegramId,
+          '✅ Спасибо! Твой вопрос принят и будет рассмотрен.\n\nМожешь продолжить тренировку с помощью /start'
+        );
+      } else {
+        await bot.sendMessage(telegramId, '❌ Не удалось сохранить вопрос. Попробуй позже.');
+      }
       return;
     }
     
