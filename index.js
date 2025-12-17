@@ -236,6 +236,7 @@ bot.onText(/\/help/, async (msg) => {
     `/stats — Показать статистику выполнения\n` +
     `/streak — Показать текущие серии и бейджи\n` +
     `/suggest — Предложить свой вопрос\n` +
+    `/reset — Сбросить свой прогресс\n` +
     `/donate — Поддержать проект\n` +
     `/help — Показать эту справку\n\n` +
     `💡 Как это работает:\n` +
@@ -307,6 +308,65 @@ bot.onText(/\/donate/, async (msg) => {
     `Спасибо за поддержку! ❤️`;
   
   await bot.sendMessage(telegramId, donateMessage);
+});
+
+// Обработчик команды /reset
+bot.onText(/\/reset/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  try {
+    const user = db.getUser(telegramId);
+    
+    if (!user) {
+      await bot.sendMessage(telegramId, 'Сначала используй команду /start');
+      return;
+    }
+    
+    const resetKeyboard = {
+      inline_keyboard: [
+        [
+          {
+            text: '🔄 Сбросить сегодня',
+            callback_data: 'reset_today'
+          }
+        ],
+        [
+          {
+            text: '🗑 Сбросить историю вопросов',
+            callback_data: 'reset_questions'
+          }
+        ],
+        [
+          {
+            text: '⚠️ Полный сброс',
+            callback_data: 'reset_full'
+          }
+        ],
+        [
+          {
+            text: '❌ Отмена',
+            callback_data: 'reset_cancel'
+          }
+        ]
+      ]
+    };
+    
+    await bot.sendMessage(
+      telegramId,
+      `🔄 Сброс прогресса\n\n` +
+      `Выбери, что ты хочешь сбросить:\n\n` +
+      `🔄 **Сегодня** — сбросить только прогресс за сегодняшний день\n` +
+      `🗑 **История вопросов** — очистить историю, чтобы получать все вопросы заново (сохранит статистику и серии)\n` +
+      `⚠️ **Полный сброс** — удалить ВСЁ: статистику, серии, бейджи, историю`,
+      { 
+        reply_markup: resetKeyboard,
+        parse_mode: 'Markdown'
+      }
+    );
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /reset:', error);
+    await bot.sendMessage(telegramId, 'Произошла ошибка. Попробуйте ещё раз.');
+  }
 });
 
 // ===== АДМИНИСТРАТИВНЫЕ КОМАНДЫ =====
@@ -724,6 +784,96 @@ bot.onText(/\/admin_reject_question\s+(\d+)/, async (msg, match) => {
   }
 });
 
+// Сброс истории вопросов пользователя
+bot.onText(/\/admin_reset_questions\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const targetUserId = parseInt(match[1]);
+    const result = db.resetUserQuestions(targetUserId);
+    
+    if (result.success) {
+      await bot.sendMessage(
+        telegramId, 
+        `✅ История вопросов сброшена для пользователя ${targetUserId}\n` +
+        `Удалено записей: ${result.deletedRecords}\n\n` +
+        `Теперь пользователь сможет получать все вопросы заново.`
+      );
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_reset_questions:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Полный сброс пользователя
+bot.onText(/\/admin_reset_user\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const targetUserId = parseInt(match[1]);
+    const result = db.resetUserFull(targetUserId);
+    
+    if (result.success) {
+      await bot.sendMessage(
+        telegramId, 
+        `✅ Полный сброс пользователя ${targetUserId}\n\n` +
+        `Сброшено:\n` +
+        `- Вся статистика (выполненные/пропущенные дни)\n` +
+        `- Серии (текущая и лучшая)\n` +
+        `- История вопросов\n` +
+        `- Все бейджи\n\n` +
+        `⚠️ Это действие необратимо!`
+      );
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_reset_user:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Сброс прогресса за сегодня
+bot.onText(/\/admin_reset_today\s+(\d+)/, async (msg, match) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const targetUserId = parseInt(match[1]);
+    const result = db.resetTodayProgress(targetUserId);
+    
+    if (result.success) {
+      await bot.sendMessage(
+        telegramId, 
+        `✅ Прогресс за сегодня сброшен для пользователя ${targetUserId}\n\n` +
+        `Пользователь может начать сегодняшнее задание заново.`
+      );
+    } else {
+      await bot.sendMessage(telegramId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_reset_today:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
 // Вспомогательная функция для склонения слова "день"
 const getDaysWord = (count) => {
   const lastDigit = count % 10;
@@ -880,6 +1030,195 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, {
         text: 'Держи новый вопрос для тренировки!'
       });
+    } else if (query.data === 'reset_today') {
+      // Подтверждение сброса сегодняшнего прогресса
+      const confirmKeyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: '✅ Да, сбросить',
+              callback_data: 'confirm_reset_today'
+            },
+            {
+              text: '❌ Отмена',
+              callback_data: 'reset_cancel'
+            }
+          ]
+        ]
+      };
+      
+      try {
+        await bot.editMessageText(
+          `⚠️ Подтверждение сброса\n\n` +
+          `Ты уверен, что хочешь сбросить прогресс за сегодня?\n\n` +
+          `Это действие нельзя отменить.`,
+          {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: confirmKeyboard
+          }
+        );
+      } catch (e) {
+        console.error('[ERROR] Ошибка при редактировании сообщения:', e);
+      }
+      
+      await bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'confirm_reset_today') {
+      const result = db.resetTodayProgress(telegramId);
+      
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (e) {
+        // Игнорируем ошибку удаления
+      }
+      
+      if (result.success) {
+        await bot.sendMessage(
+          telegramId,
+          `✅ Прогресс за сегодня сброшен!\n\nИспользуй /start чтобы начать заново.`
+        );
+      } else {
+        await bot.sendMessage(
+          telegramId,
+          `❌ ${result.message}`
+        );
+      }
+      
+      await bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'reset_questions') {
+      // Подтверждение сброса истории вопросов
+      const confirmKeyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: '✅ Да, сбросить',
+              callback_data: 'confirm_reset_questions'
+            },
+            {
+              text: '❌ Отмена',
+              callback_data: 'reset_cancel'
+            }
+          ]
+        ]
+      };
+      
+      try {
+        await bot.editMessageText(
+          `⚠️ Подтверждение сброса\n\n` +
+          `Ты уверен, что хочешь сбросить историю вопросов?\n\n` +
+          `После сброса ты сможешь получать все вопросы заново.\n` +
+          `Твоя статистика, серии и бейджи сохранятся.\n\n` +
+          `Это действие нельзя отменить.`,
+          {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: confirmKeyboard
+          }
+        );
+      } catch (e) {
+        console.error('[ERROR] Ошибка при редактировании сообщения:', e);
+      }
+      
+      await bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'confirm_reset_questions') {
+      const result = db.resetUserQuestions(telegramId);
+      
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (e) {
+        // Игнорируем ошибку удаления
+      }
+      
+      if (result.success) {
+        await bot.sendMessage(
+          telegramId,
+          `✅ История вопросов сброшена!\n\n` +
+          `Удалено записей: ${result.deletedRecords}\n\n` +
+          `Теперь ты можешь получать все вопросы заново.\n` +
+          `Используй /start для начала.`
+        );
+      } else {
+        await bot.sendMessage(
+          telegramId,
+          `❌ ${result.message}`
+        );
+      }
+      
+      await bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'reset_full') {
+      // Подтверждение полного сброса
+      const confirmKeyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: '✅ Да, удалить ВСЁ',
+              callback_data: 'confirm_reset_full'
+            }
+          ],
+          [
+            {
+              text: '❌ Нет, отменить',
+              callback_data: 'reset_cancel'
+            }
+          ]
+        ]
+      };
+      
+      try {
+        await bot.editMessageText(
+          `⚠️⚠️⚠️ ВНИМАНИЕ ⚠️⚠️⚠️\n\n` +
+          `Ты собираешься удалить ВСЁ:\n` +
+          `• Всю статистику\n` +
+          `• Все серии (текущую и лучшую)\n` +
+          `• Всю историю вопросов\n` +
+          `• Все полученные бейджи\n\n` +
+          `Ты вернёшься к самому началу, как будто только зарегистрировался.\n\n` +
+          `ЭТО ДЕЙСТВИЕ НЕЛЬЗЯ ОТМЕНИТЬ!\n\n` +
+          `Ты точно уверен?`,
+          {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: confirmKeyboard
+          }
+        );
+      } catch (e) {
+        console.error('[ERROR] Ошибка при редактировании сообщения:', e);
+      }
+      
+      await bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'confirm_reset_full') {
+      const result = db.resetUserFull(telegramId);
+      
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (e) {
+        // Игнорируем ошибку удаления
+      }
+      
+      if (result.success) {
+        await bot.sendMessage(
+          telegramId,
+          `✅ Полный сброс выполнен!\n\n` +
+          `Все твои данные удалены. Ты начинаешь с чистого листа.\n\n` +
+          `Используй /start чтобы начать заново.`
+        );
+      } else {
+        await bot.sendMessage(
+          telegramId,
+          `❌ ${result.message}`
+        );
+      }
+      
+      await bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'reset_cancel') {
+      try {
+        await bot.deleteMessage(chatId, messageId);
+      } catch (e) {
+        // Игнорируем ошибку удаления
+      }
+      
+      await bot.sendMessage(telegramId, 'Сброс отменён.');
+      await bot.answerCallbackQuery(query.id);
     }
   } catch (error) {
     console.error('[ERROR] Ошибка при обработке callback_query:', error);

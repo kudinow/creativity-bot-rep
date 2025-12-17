@@ -821,6 +821,84 @@ const rejectSuggestion = (suggestionId) => {
   }
 };
 
+// Сброс истории вопросов пользователя (чтобы он мог получать их снова)
+const resetUserQuestions = (telegramId) => {
+  try {
+    const user = getUser(telegramId);
+    if (!user) {
+      return { success: false, message: 'Пользователь не найден' };
+    }
+    
+    const result = db.prepare('DELETE FROM daily_progress WHERE user_id = ?').run(user.id);
+    console.log(`[БД] Сброшена история вопросов для пользователя ${telegramId}: удалено записей - ${result.changes}`);
+    
+    return { success: true, deletedRecords: result.changes };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при сбросе истории вопросов:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
+// Полный сброс пользователя (статистика, история, бейджи)
+const resetUserFull = (telegramId) => {
+  try {
+    const user = getUser(telegramId);
+    if (!user) {
+      return { success: false, message: 'Пользователь не найден' };
+    }
+    
+    const transaction = db.transaction(() => {
+      // Сбрасываем статистику
+      db.prepare(`
+        UPDATE users 
+        SET completed_days = 0, 
+            missed_days = 0, 
+            current_streak = 0, 
+            best_streak = 0, 
+            last_completed_date = NULL 
+        WHERE id = ?
+      `).run(user.id);
+      
+      // Удаляем историю вопросов
+      db.prepare('DELETE FROM daily_progress WHERE user_id = ?').run(user.id);
+      
+      // Удаляем бейджи
+      db.prepare('DELETE FROM user_badges WHERE user_id = ?').run(user.id);
+      
+      console.log(`[БД] Полный сброс пользователя ${telegramId}`);
+      return { success: true };
+    });
+    
+    return transaction();
+  } catch (error) {
+    console.error('[ERROR] Ошибка при полном сбросе пользователя:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
+// Сброс прогресса за сегодня
+const resetTodayProgress = (telegramId) => {
+  try {
+    const user = getUser(telegramId);
+    if (!user) {
+      return { success: false, message: 'Пользователь не найден' };
+    }
+    
+    const today = new Date().toISOString().split('T')[0];
+    const result = db.prepare('DELETE FROM daily_progress WHERE user_id = ? AND date = ?').run(user.id, today);
+    
+    if (result.changes > 0) {
+      console.log(`[БД] Сброшен прогресс за сегодня для пользователя ${telegramId}`);
+      return { success: true };
+    }
+    
+    return { success: false, message: 'Нет прогресса за сегодня' };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при сбросе прогресса за сегодня:', error);
+    return { success: false, message: 'Ошибка базы данных' };
+  }
+};
+
 module.exports = {
   initDatabase,
   seedQuestions,
@@ -853,5 +931,8 @@ module.exports = {
   searchQuestions,
   getPendingSuggestions,
   approveSuggestion,
-  rejectSuggestion
+  rejectSuggestion,
+  resetUserQuestions,
+  resetUserFull,
+  resetTodayProgress
 };
