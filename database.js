@@ -220,8 +220,33 @@ const getAllUsers = () => {
 };
 
 // Получение случайного вопроса
-const getRandomQuestion = () => {
+const getRandomQuestion = (userId = null) => {
   try {
+    // Если передан userId, исключаем вопросы, на которые пользователь уже отвечал
+    if (userId) {
+      const stmt = db.prepare(`
+        SELECT * FROM questions 
+        WHERE id NOT IN (
+          SELECT DISTINCT question_id 
+          FROM daily_progress 
+          WHERE user_id = ?
+        )
+        ORDER BY RANDOM() 
+        LIMIT 1
+      `);
+      const question = stmt.get(userId);
+      
+      // Если все вопросы использованы, возвращаем любой случайный
+      if (!question) {
+        console.log(`[БД] Пользователь ${userId} использовал все вопросы, возвращаем случайный`);
+        const fallbackStmt = db.prepare('SELECT * FROM questions ORDER BY RANDOM() LIMIT 1');
+        return fallbackStmt.get();
+      }
+      
+      return question;
+    }
+    
+    // Если userId не передан, возвращаем просто случайный вопрос
     const stmt = db.prepare('SELECT * FROM questions ORDER BY RANDOM() LIMIT 1');
     return stmt.get();
   } catch (error) {
@@ -230,9 +255,35 @@ const getRandomQuestion = () => {
   }
 };
 
-// Получение случайного вопроса, исключая указанный
-const getRandomQuestionExcept = (excludeQuestionId) => {
+// Получение случайного вопроса, исключая указанный (используется при смене вопроса)
+const getRandomQuestionExcept = (excludeQuestionId, userId = null) => {
   try {
+    // Если передан userId, исключаем вопросы, на которые пользователь уже отвечал
+    if (userId) {
+      const stmt = db.prepare(`
+        SELECT * FROM questions 
+        WHERE id != ? 
+        AND id NOT IN (
+          SELECT DISTINCT question_id 
+          FROM daily_progress 
+          WHERE user_id = ? AND is_completed = 1
+        )
+        ORDER BY RANDOM() 
+        LIMIT 1
+      `);
+      const question = stmt.get(excludeQuestionId, userId);
+      
+      // Если подходящих вопросов нет (кроме текущего и завершённых), берём любой кроме текущего
+      if (!question) {
+        console.log(`[БД] Нет новых вопросов для пользователя ${userId}, берём любой кроме текущего`);
+        const fallbackStmt = db.prepare('SELECT * FROM questions WHERE id != ? ORDER BY RANDOM() LIMIT 1');
+        return fallbackStmt.get(excludeQuestionId);
+      }
+      
+      return question;
+    }
+    
+    // Если userId не передан, просто исключаем указанный вопрос
     const stmt = db.prepare('SELECT * FROM questions WHERE id != ? ORDER BY RANDOM() LIMIT 1');
     return stmt.get(excludeQuestionId);
   } catch (error) {

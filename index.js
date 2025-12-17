@@ -792,8 +792,8 @@ bot.on('callback_query', async (query) => {
         return;
       }
       
-      // Получаем новый вопрос (исключая текущий)
-      const newQuestion = db.getRandomQuestionExcept(progress.question_id);
+      // Получаем новый вопрос (исключая текущий и уже завершённые)
+      const newQuestion = db.getRandomQuestionExcept(progress.question_id, user.id);
       
       if (!newQuestion) {
         await bot.answerCallbackQuery(query.id, {
@@ -848,8 +848,8 @@ bot.on('callback_query', async (query) => {
         return;
       }
       
-      // Получаем случайный вопрос для бонусной тренировки
-      const bonusQuestion = db.getRandomQuestion();
+      // Получаем случайный вопрос для бонусной тренировки (исключая уже использованные)
+      const bonusQuestion = db.getRandomQuestion(user.id);
       
       if (!bonusQuestion) {
         await bot.answerCallbackQuery(query.id, {
@@ -940,7 +940,7 @@ bot.on('message', async (msg) => {
     
     // Если прогресса нет - создаём новый вопрос дня
     if (!progress) {
-      const question = db.getRandomQuestion();
+      const question = db.getRandomQuestion(user.id);
       const today = new Date().toISOString().split('T')[0];
       db.createDailyProgress(user.id, today, question.id);
       progress = db.getTodayProgress(telegramId);

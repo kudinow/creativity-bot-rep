@@ -12,16 +12,19 @@ const startScheduler = (bot, db) => {
       console.log('[CRON] Начата рассылка ежедневного вопроса');
       
       const users = db.getAllUsers();
-      const question = db.getRandomQuestion();
       const today = new Date().toISOString().split('T')[0];
-
-      if (!question) {
-        console.error('[ERROR] Не удалось получить вопрос для рассылки');
-        return;
-      }
+      let successCount = 0;
 
       for (const user of users) {
         try {
+          // Получаем случайный вопрос для каждого пользователя (исключая уже использованные)
+          const question = db.getRandomQuestion(user.id);
+          
+          if (!question) {
+            console.error(`[ERROR] Не удалось получить вопрос для пользователя ${user.telegram_id}`);
+            continue;
+          }
+
           // Создаём запись прогресса на сегодня
           db.createDailyProgress(user.id, today, question.id);
 
@@ -31,13 +34,14 @@ const startScheduler = (bot, db) => {
             `Вопрос дня: ${question.text}\n\nПришли 10 ответов до конца дня. Можно по одному сообщению или списком.`
           );
           
-          console.log(`[CRON] Вопрос отправлен пользователю ${user.telegram_id}`);
+          successCount++;
+          console.log(`[CRON] Вопрос отправлен пользователю ${user.telegram_id} (ID вопроса: ${question.id})`);
         } catch (error) {
           console.error(`[ERROR] Ошибка при отправке вопроса пользователю ${user.telegram_id}:`, error);
         }
       }
 
-      console.log(`[CRON] Рассылка завершена. Отправлено пользователям: ${users.length}`);
+      console.log(`[CRON] Рассылка завершена. Успешно отправлено: ${successCount}/${users.length}`);
     } catch (error) {
       console.error('[ERROR] Ошибка при выполнении задачи рассылки:', error);
     }
