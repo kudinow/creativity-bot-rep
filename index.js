@@ -1402,5 +1402,15 @@ db.seedQuestions();
 db.seedBadges();
 startScheduler(bot, db);
 
+// Запуск веб-дашборда (опционально)
+if (process.env.ENABLE_DASHBOARD === 'true') {
+  try {
+    const { startDashboard } = require('./web-dashboard');
+    startDashboard();
+  } catch (error) {
+    console.error('[ERROR] Не удалось запустить веб-панель:', error.message);
+  }
+}
+
 // Запуск бота
 console.log('[БОТ] Бот запущен и готов к работе');
