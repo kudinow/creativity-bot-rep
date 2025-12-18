@@ -451,6 +451,32 @@ app.get('/', (req, res) => {
       color: #9ca3af;
       font-size: 14px;
     }
+    
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    
+    .commands-link {
+      display: inline-block;
+      padding: 8px 16px;
+      background: rgba(62, 207, 142, 0.1);
+      border: 1px solid #3ecf8e;
+      border-radius: 8px;
+      color: #3ecf8e;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    
+    .commands-link:hover {
+      background: rgba(62, 207, 142, 0.2);
+      transform: translateY(-2px);
+    }
 
     .auth-section {
       background: #1a1a1a;
@@ -841,8 +867,10 @@ app.get('/', (req, res) => {
 
 // Запуск сервера
 const startDashboard = () => {
-  app.listen(PORT, () => {
-    console.log(`[DASHBOARD] Веб-панель запущена на http://localhost:${PORT}`);
+  // Слушаем на 0.0.0.0 для доступа извне контейнера
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[DASHBOARD] Веб-панель запущена на http://0.0.0.0:${PORT}`);
+    console.log(`[DASHBOARD] Локальный доступ: http://localhost:${PORT}`);
     console.log(`[DASHBOARD] Пароль для входа: ${DASHBOARD_PASSWORD}`);
   });
 };
