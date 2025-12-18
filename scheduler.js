@@ -2,6 +2,37 @@
 const cron = require('node-cron');
 require('dotenv').config();
 
+// Генерация визуального прогресс-бара
+const generateProgressBar = (current, total = 10) => {
+  const filled = Math.min(current, total);
+  const empty = total - filled;
+  
+  const filledSquares = '✅'.repeat(filled);
+  const emptySquares = '⬜'.repeat(empty);
+  
+  return filledSquares + emptySquares;
+};
+
+// Создание inline-клавиатуры для смены вопроса
+const createQuestionKeyboard = (changesCount, isCompleted = false) => {
+  // Если задание выполнено или достигнут лимит - не показываем кнопку
+  if (isCompleted || changesCount >= 3) {
+    return {
+      inline_keyboard: []
+    };
+  }
+  
+  const remainingChanges = 3 - changesCount;
+  return {
+    inline_keyboard: [[
+      {
+        text: `🔄 Другой вопрос (осталось: ${remainingChanges})`,
+        callback_data: 'change_question'
+      }
+    ]]
+  };
+};
+
 // Запуск планировщика
 const startScheduler = (bot, db) => {
   const timezone = process.env.TIMEZONE || 'Europe/Moscow';
@@ -28,10 +59,16 @@ const startScheduler = (bot, db) => {
           // Создаём запись прогресса на сегодня
           db.createDailyProgress(user.id, today, question.id);
 
-          // Отправляем вопрос пользователю
+          // Получаем прогресс для отображения кнопки
+          const progress = db.getTodayProgress(user.telegram_id);
+          const progressBar = generateProgressBar(0);
+          const keyboard = createQuestionKeyboard(progress.question_changes_count || 0, false);
+
+          // Отправляем вопрос пользователю с кнопкой смены вопроса
           await bot.sendMessage(
             user.telegram_id,
-            `Вопрос дня: ${question.text}\n\nПришли 10 ответов до конца дня. Можно по одному сообщению или списком.`
+            `Вопрос дня: ${question.text}\n\n${progressBar}\n\nПришли 10 ответов до конца дня. Можно по одному сообщению или списком.`,
+            { reply_markup: keyboard }
           );
           
           successCount++;

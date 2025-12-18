@@ -14,6 +14,20 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
+// Установка меню команд для бота
+const setCommands = async () => {
+  try {
+    await bot.setMyCommands([
+      { command: 'help', description: 'Справка по командам' },
+      { command: 'suggest', description: 'Предложить свой вопрос' },
+      { command: 'streak', description: 'Показать серии и бейджи' }
+    ]);
+    console.log('[БОТ] Меню команд установлено');
+  } catch (error) {
+    console.error('[ERROR] Ошибка при установке меню команд:', error);
+  }
+};
+
 // Проверка прав администратора
 const isAdmin = (telegramId) => adminIds.includes(telegramId);
 
@@ -1400,6 +1414,7 @@ console.log('[БОТ] Инициализация...');
 db.initDatabase();
 db.seedQuestions();
 db.seedBadges();
+setCommands();
 startScheduler(bot, db);
 
 // Запуск веб-дашборда (опционально)
