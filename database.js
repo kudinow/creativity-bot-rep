@@ -899,6 +899,102 @@ const resetTodayProgress = (telegramId) => {
   }
 };
 
+// Получение статистики пользователей по дням (для графиков)
+const getUsersStatsByDays = (days = 30) => {
+  try {
+    const stats = [];
+    const today = new Date();
+    
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      
+      // Всего пользователей на эту дату (зарегистрированных до этой даты включительно)
+      const totalUsers = db.prepare(`
+        SELECT COUNT(*) as count 
+        FROM users 
+        WHERE DATE(created_at) <= ?
+      `).get(dateStr).count;
+      
+      // Активные пользователи в этот день (выполнили задание)
+      const activeUsers = db.prepare(`
+        SELECT COUNT(DISTINCT user_id) as count 
+        FROM daily_progress 
+        WHERE date = ? AND is_completed = 1
+      `).get(dateStr).count;
+      
+      stats.push({
+        date: dateStr,
+        totalUsers,
+        activeUsers
+      });
+    }
+    
+    return stats;
+  } catch (error) {
+    console.error('[ERROR] getUsersStatsByDays:', error);
+    return [];
+  }
+};
+
+// Получение списка всех вопросов с информацией об использовании
+const getAllQuestionsWithUsage = () => {
+  try {
+    const questions = db.prepare(`
+      SELECT q.id, q.text,
+             COUNT(DISTINCT dp.user_id) as used_by_users,
+             COUNT(dp.id) as total_usage
+      FROM questions q
+      LEFT JOIN daily_progress dp ON q.id = dp.question_id
+      GROUP BY q.id
+      ORDER BY q.id
+    `).all();
+    
+    return questions;
+  } catch (error) {
+    console.error('[ERROR] getAllQuestionsWithUsage:', error);
+    return [];
+  }
+};
+
+// Получение неиспользованных вопросов
+const getUnusedQuestions = () => {
+  try {
+    const questions = db.prepare(`
+      SELECT q.id, q.text
+      FROM questions q
+      LEFT JOIN daily_progress dp ON q.id = dp.question_id
+      WHERE dp.id IS NULL
+      ORDER BY q.id
+    `).all();
+    
+    return questions;
+  } catch (error) {
+    console.error('[ERROR] getUnusedQuestions:', error);
+    return [];
+  }
+};
+
+// Получение предложенных вопросов с деталями
+const getSuggestedQuestionsWithDetails = () => {
+  try {
+    const suggestions = db.prepare(`
+      SELECT sq.id, sq.question_text, sq.created_at,
+             u.telegram_id, sq.status
+      FROM suggested_questions sq
+      JOIN users u ON sq.user_id = u.id
+      WHERE sq.status = 'pending'
+      ORDER BY sq.created_at DESC
+    `).all();
+    
+    return suggestions;
+  } catch (error) {
+    console.error('[ERROR] getSuggestedQuestionsWithDetails:', error);
+    return [];
+  }
+};
+
 module.exports = {
   initDatabase,
   seedQuestions,
@@ -934,5 +1030,10 @@ module.exports = {
   rejectSuggestion,
   resetUserQuestions,
   resetUserFull,
-  resetTodayProgress
+  resetTodayProgress,
+  // Функции для Dashboard
+  getUsersStatsByDays,
+  getAllQuestionsWithUsage,
+  getUnusedQuestions,
+  getSuggestedQuestionsWithDetails
 };

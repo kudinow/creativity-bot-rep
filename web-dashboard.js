@@ -84,6 +84,48 @@ app.get('/api/suggestions', checkAuth, (req, res) => {
   }
 });
 
+// Новые endpoints для графиков и модальных окон
+app.get('/api/stats/daily', checkAuth, (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const stats = db.getUsersStatsByDays(days);
+    res.json(stats);
+  } catch (error) {
+    console.error('[ERROR] /api/stats/daily:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/questions/all', checkAuth, (req, res) => {
+  try {
+    const questions = db.getAllQuestionsWithUsage();
+    res.json(questions);
+  } catch (error) {
+    console.error('[ERROR] /api/questions/all:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/questions/unused', checkAuth, (req, res) => {
+  try {
+    const questions = db.getUnusedQuestions();
+    res.json(questions);
+  } catch (error) {
+    console.error('[ERROR] /api/questions/unused:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/questions/suggested', checkAuth, (req, res) => {
+  try {
+    const suggestions = db.getSuggestedQuestionsWithDetails();
+    res.json(suggestions);
+  } catch (error) {
+    console.error('[ERROR] /api/questions/suggested:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Справка по админским командам
 app.get('/commands', (req, res) => {
   res.send(`
@@ -662,6 +704,130 @@ app.get('/', (req, res) => {
       border-radius: 50%;
       animation: spin 0.6s linear infinite;
     }
+
+    /* Графики */
+    .charts-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .chart-card {
+      background: #1a1a1a;
+      border: 1px solid #2d2d2d;
+      border-radius: 12px;
+      padding: 24px;
+    }
+
+    .chart-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #ededed;
+    }
+
+    /* Кликабельные карточки */
+    .clickable-card {
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .clickable-card:hover {
+      transform: translateY(-4px);
+      border-color: #3ecf8e;
+      box-shadow: 0 4px 12px rgba(62, 207, 142, 0.2);
+    }
+
+    /* Модальное окно */
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background: #1a1a1a;
+      border: 1px solid #2d2d2d;
+      border-radius: 12px;
+      max-width: 800px;
+      width: 90%;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 24px;
+      border-bottom: 1px solid #2d2d2d;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 24px;
+      color: #ededed;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      font-size: 32px;
+      cursor: pointer;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s;
+    }
+
+    .modal-close:hover {
+      color: #ef4444;
+    }
+
+    .modal-body {
+      padding: 24px;
+      overflow-y: auto;
+    }
+
+    .question-item {
+      background: #0f0f0f;
+      border: 1px solid #2d2d2d;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+
+    .question-text {
+      color: #ededed;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    .question-meta {
+      color: #9ca3af;
+      font-size: 12px;
+      display: flex;
+      gap: 16px;
+    }
+
+    .question-meta span {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
   </style>
 </head>
 <body>
@@ -707,6 +873,18 @@ app.get('/', (req, res) => {
       </div>
     </div>
 
+    <!-- Графики -->
+    <div class="charts-container">
+      <div class="chart-card">
+        <div class="chart-title">📈 Всего пользователей</div>
+        <canvas id="totalUsersChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">✅ Активные сегодня</div>
+        <canvas id="activeUsersChart"></canvas>
+      </div>
+    </div>
+
     <div class="section">
       <div class="section-title">🔥 Топ пользователей по сериям</div>
       <div id="topStreaksLoading" class="loading"><span class="spinner"></span></div>
@@ -727,22 +905,40 @@ app.get('/', (req, res) => {
     <div class="section">
       <div class="section-title">❓ Статистика вопросов</div>
       <div class="grid">
-        <div class="card">
+        <div class="card clickable-card" onclick="showQuestionsModal('all')">
           <div class="card-title">Всего вопросов</div>
           <div class="card-value" id="totalQuestions">-</div>
+          <div class="card-subtitle">Нажмите для просмотра</div>
         </div>
-        <div class="card">
+        <div class="card clickable-card" onclick="showQuestionsModal('unused')">
           <div class="card-title">Неиспользованных</div>
           <div class="card-value" id="unusedQuestions">-</div>
+          <div class="card-subtitle">Нажмите для просмотра</div>
         </div>
-        <div class="card">
+        <div class="card clickable-card" onclick="showQuestionsModal('suggested')">
           <div class="card-title">Предложения пользователей</div>
           <div class="card-value" id="pendingSuggestions">-</div>
+          <div class="card-subtitle">Нажмите для просмотра</div>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- Модальное окно для списков вопросов -->
+  <div id="questionsModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modalTitle">Вопросы</h2>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <div class="loading"><span class="spinner"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script>
     let authToken = '';
 
@@ -782,6 +978,7 @@ app.get('/', (req, res) => {
     function loadData() {
       loadOverviewStats();
       loadQuestionsStats();
+      loadCharts();
     }
 
     function loadOverviewStats() {
@@ -852,6 +1049,215 @@ app.get('/', (req, res) => {
         errorDiv.classList.add('hidden');
       }, 5000);
     }
+
+    // Переменные для графиков
+    let totalUsersChart = null;
+    let activeUsersChart = null;
+
+    // Загрузка и отрисовка графиков
+    function loadCharts() {
+      fetch('/api/stats/daily?days=30', {
+        headers: {
+          'Authorization': 'Bearer ' + authToken
+        }
+      })
+      .then(response => response.json())
+      .then(data => {
+        const labels = data.map(d => {
+          const date = new Date(d.date);
+          return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+        });
+        const totalUsersData = data.map(d => d.totalUsers);
+        const activeUsersData = data.map(d => d.activeUsers);
+
+        // График "Всего пользователей"
+        const totalUsersCtx = document.getElementById('totalUsersChart').getContext('2d');
+        if (totalUsersChart) totalUsersChart.destroy();
+        totalUsersChart = new Chart(totalUsersCtx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Всего пользователей',
+              data: totalUsersData,
+              borderColor: '#3ecf8e',
+              backgroundColor: 'rgba(62, 207, 142, 0.1)',
+              fill: true,
+              tension: 0.4
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+              legend: {
+                display: false
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  color: '#9ca3af'
+                },
+                grid: {
+                  color: '#2d2d2d'
+                }
+              },
+              x: {
+                ticks: {
+                  color: '#9ca3af'
+                },
+                grid: {
+                  color: '#2d2d2d'
+                }
+              }
+            }
+          }
+        });
+
+        // График "Активные сегодня"
+        const activeUsersCtx = document.getElementById('activeUsersChart').getContext('2d');
+        if (activeUsersChart) activeUsersChart.destroy();
+        activeUsersChart = new Chart(activeUsersCtx, {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Активные пользователи',
+              data: activeUsersData,
+              backgroundColor: 'rgba(62, 207, 142, 0.6)',
+              borderColor: '#3ecf8e',
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+              legend: {
+                display: false
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  color: '#9ca3af'
+                },
+                grid: {
+                  color: '#2d2d2d'
+                }
+              },
+              x: {
+                ticks: {
+                  color: '#9ca3af'
+                },
+                grid: {
+                  color: '#2d2d2d'
+                }
+              }
+            }
+          }
+        });
+      })
+      .catch(error => {
+        console.error('Error loading charts:', error);
+      });
+    }
+
+    // Показать модальное окно с вопросами
+    function showQuestionsModal(type) {
+      const modal = document.getElementById('questionsModal');
+      const modalTitle = document.getElementById('modalTitle');
+      const modalBody = document.getElementById('modalBody');
+
+      // Устанавливаем заголовок
+      const titles = {
+        'all': 'Все вопросы',
+        'unused': 'Неиспользованные вопросы',
+        'suggested': 'Предложения пользователей'
+      };
+      modalTitle.textContent = titles[type] || 'Вопросы';
+
+      // Показываем модальное окно с загрузкой
+      modal.classList.remove('hidden');
+      modalBody.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+      // Определяем endpoint
+      const endpoints = {
+        'all': '/api/questions/all',
+        'unused': '/api/questions/unused',
+        'suggested': '/api/questions/suggested'
+      };
+
+      // Загружаем данные
+      fetch(endpoints[type], {
+        headers: {
+          'Authorization': 'Bearer ' + authToken
+        }
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.length === 0) {
+          modalBody.innerHTML = '<p style="color: #9ca3af; text-align: center;">Нет данных</p>';
+          return;
+        }
+
+        let html = '';
+        data.forEach((item, index) => {
+          if (type === 'all') {
+            html += \`
+              <div class="question-item">
+                <div class="question-text">\${index + 1}. \${item.text}</div>
+                <div class="question-meta">
+                  <span>👥 Использовали: \${item.used_by_users} чел.</span>
+                  <span>📊 Всего использований: \${item.total_usage}</span>
+                </div>
+              </div>
+            \`;
+          } else if (type === 'unused') {
+            html += \`
+              <div class="question-item">
+                <div class="question-text">\${index + 1}. \${item.text}</div>
+                <div class="question-meta">
+                  <span>💤 Ещё не использовался</span>
+                </div>
+              </div>
+            \`;
+          } else if (type === 'suggested') {
+            const date = new Date(item.created_at).toLocaleDateString('ru-RU');
+            html += \`
+              <div class="question-item">
+                <div class="question-text">\${index + 1}. \${item.question_text}</div>
+                <div class="question-meta">
+                  <span>👤 От: \${item.telegram_id}</span>
+                  <span>📅 Дата: \${date}</span>
+                </div>
+              </div>
+            \`;
+          }
+        });
+
+        modalBody.innerHTML = html;
+      })
+      .catch(error => {
+        console.error('Error loading questions:', error);
+        modalBody.innerHTML = '<p style="color: #ef4444; text-align: center;">Ошибка загрузки данных</p>';
+      });
+    }
+
+    // Закрыть модальное окно
+    function closeModal() {
+      document.getElementById('questionsModal').classList.add('hidden');
+    }
+
+    // Закрытие модального окна по клику вне его
+    document.getElementById('questionsModal')?.addEventListener('click', (e) => {
+      if (e.target.id === 'questionsModal') {
+        closeModal();
+      }
+    });
 
     // Автообновление каждые 30 секунд
     setInterval(() => {
