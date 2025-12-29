@@ -1,0 +1,29 @@
+services:
+  creativity-bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: creativity-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - TIMEZONE=${TIMEZONE:-Europe/Moscow}
+      - NODE_ENV=production
+      - ENABLE_DASHBOARD=${ENABLE_DASHBOARD:-false}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-3000}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - ADMIN_IDS=${ADMIN_IDS}
+    ports:
+      # Проброс порта для веб-панели статистики (если включена)
+      - "${DASHBOARD_PORT:-3000}:${DASHBOARD_PORT:-3000}"
+    volumes:
+      # Монтируем директорию для сохранения базы данных между перезапусками
+      - ./data:/app/data
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
