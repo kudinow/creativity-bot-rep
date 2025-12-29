@@ -1,5 +1,7 @@
 // Главный файл Telegram-бота для развития креативности
 const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+const path = require('path');
 const db = require('./database');
 const { startScheduler } = require('./scheduler');
 require('dotenv').config();
@@ -30,6 +32,22 @@ const setCommands = async () => {
 
 // Проверка прав администратора
 const isAdmin = (telegramId) => adminIds.includes(telegramId);
+
+// Безопасная отправка сообщения с отслеживанием блокировок
+const safeSendMessage = async (telegramId, text, options = {}) => {
+  try {
+    return await bot.sendMessage(telegramId, text, options);
+  } catch (error) {
+    // Если пользователь заблокировал бота
+    if (error.response && error.response.body && 
+        (error.response.body.description?.includes('bot was blocked') ||
+         error.response.body.description?.includes('user is deactivated'))) {
+      console.log(`[БОТ] Пользователь ${telegramId} заблокировал бота`);
+      db.recordUserBlock(telegramId);
+    }
+    throw error;
+  }
+};
 
 // Подсчёт количества ответов в тексте
 const countAnswers = (text) => {
@@ -260,7 +278,10 @@ bot.onText(/\/help/, async (msg) => {
     `🎖 Бейджи за серии:\n` +
     `🔥 Новичок — 3 дня подряд\n` +
     `🌟 Энтузиаст — 7 дней подряд\n` +
+    `⚡ Упорный — 14 дней подряд\n` +
     `💎 Мастер — 30 дней подряд\n` +
+    `🏆 Профи — 60 дней подряд\n` +
+    `🎯 Гуру — 90 дней подряд\n` +
     `👑 Легенда — 100 дней подряд\n\n` +
     `💭 Есть идеи по улучшению?\n` +
     `Пиши сюда: @kudinow - буду рад обратной связи!`;
@@ -915,6 +936,113 @@ bot.onText(/\/admin_broadcast/, async (msg) => {
   } catch (error) {
     console.error('[ERROR] Ошибка при обработке /admin_broadcast:', error);
     await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
+// Команда для создания резервной копии базы данных
+bot.onText(/\/admin_backup/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    await bot.sendMessage(telegramId, '💾 Создаю резервную копию базы данных...');
+    
+    const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'database.db');
+    const backupDir = path.join(__dirname, '..', 'backups');
+    
+    // Создаём папку для бэкапов, если её нет
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    
+    // Формируем имя файла с датой
+    const date = new Date();
+    const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
+    const timeStr = date.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+    const backupFileName = `database-backup-${dateStr}-${timeStr}.db`;
+    const backupPath = path.join(backupDir, backupFileName);
+    
+    // Копируем файл базы данных
+    fs.copyFileSync(dbPath, backupPath);
+    
+    // Получаем размер файла
+    const stats = fs.statSync(backupPath);
+    const fileSizeInBytes = stats.size;
+    const fileSizeInKB = (fileSizeInBytes / 1024).toFixed(2);
+    
+    // Считаем количество бэкапов
+    const backupFiles = fs.readdirSync(backupDir)
+      .filter(file => file.startsWith('database-backup-') && file.endsWith('.db'));
+    
+    await bot.sendMessage(
+      telegramId,
+      `✅ Резервная копия успешно создана!\n\n` +
+      `📁 Файл: ${backupFileName}\n` +
+      `💾 Размер: ${fileSizeInKB} KB\n` +
+      `📊 Всего бэкапов: ${backupFiles.length}\n\n` +
+      `Бэкапы хранятся в папке /backups`
+    );
+    
+    console.log(`[BACKUP] Ручная резервная копия создана: ${backupFileName}`);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при создании резервной копии:', error);
+    await bot.sendMessage(telegramId, '❌ Ошибка при создании резервной копии.');
+  }
+});
+
+// Команда для просмотра списка бэкапов
+bot.onText(/\/admin_backups/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const backupDir = path.join(__dirname, '..', 'backups');
+    
+    if (!fs.existsSync(backupDir)) {
+      await bot.sendMessage(telegramId, '📁 Папка с бэкапами пуста.');
+      return;
+    }
+    
+    const backupFiles = fs.readdirSync(backupDir)
+      .filter(file => file.startsWith('database-backup-') && file.endsWith('.db'))
+      .map(file => ({
+        name: file,
+        path: path.join(backupDir, file),
+        time: fs.statSync(path.join(backupDir, file)).mtime,
+        size: fs.statSync(path.join(backupDir, file)).size
+      }))
+      .sort((a, b) => b.time - a.time);
+    
+    if (backupFiles.length === 0) {
+      await bot.sendMessage(telegramId, '📁 Резервных копий не найдено.');
+      return;
+    }
+    
+    let message = `💾 Список резервных копий (${backupFiles.length}):\n\n`;
+    
+    backupFiles.forEach((file, index) => {
+      const date = file.time.toLocaleString('ru-RU');
+      const sizeKB = (file.size / 1024).toFixed(2);
+      message += `${index + 1}. ${file.name}\n`;
+      message += `   📅 ${date}\n`;
+      message += `   💾 ${sizeKB} KB\n\n`;
+    });
+    
+    message += `\nАвтоматические бэкапы создаются каждый день в 03:00\n`;
+    message += `Хранятся последние 7 бэкапов`;
+    
+    await bot.sendMessage(telegramId, message);
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении списка бэкапов:', error);
+    await bot.sendMessage(telegramId, '❌ Ошибка при получении списка бэкапов.');
   }
 });
 

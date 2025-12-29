@@ -1,10 +1,10 @@
 // Модуль для работы с SQLite базой данных
 const Database = require('better-sqlite3');
 const path = require('path');
-const questionsData = require('./data/questions');
+const questionsData = require('../data/questions');
 
 // Путь к базе данных (поддержка Docker volumes)
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'database.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'database.db');
 const db = new Database(DB_PATH);
 
 // Инициализация базы данных и создание таблиц
@@ -118,6 +118,16 @@ const initDatabase = () => {
       )
     `);
 
+    // Таблица отписок (блокировок бота)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id INTEGER NOT NULL,
+        blocked_at TEXT NOT NULL,
+        date TEXT NOT NULL
+      )
+    `);
+
     console.log('[БД] Таблицы успешно созданы');
   } catch (error) {
     console.error('[ERROR] Ошибка при создании таблиц:', error);
@@ -158,7 +168,10 @@ const seedBadges = () => {
     const badges = [
       { name: 'Новичок', emoji: '🔥', description: '3 дня подряд', requirement: 3 },
       { name: 'Энтузиаст', emoji: '🌟', description: '7 дней подряд', requirement: 7 },
+      { name: 'Упорный', emoji: '⚡', description: '14 дней подряд', requirement: 14 },
       { name: 'Мастер', emoji: '💎', description: '30 дней подряд', requirement: 30 },
+      { name: 'Профи', emoji: '🏆', description: '60 дней подряд', requirement: 60 },
+      { name: 'Гуру', emoji: '🎯', description: '90 дней подряд', requirement: 90 },
       { name: 'Легенда', emoji: '👑', description: '100 дней подряд', requirement: 100 }
     ];
 
@@ -497,6 +510,40 @@ const getUserStreakInfo = (telegramId) => {
     };
   } catch (error) {
     console.error('[ERROR] Ошибка при получении информации о стриках:', error);
+    return null;
+  }
+};
+
+// Получение полной статистики пользователя
+const getUserStats = (telegramId) => {
+  try {
+    const user = getUser(telegramId);
+    if (!user) return null;
+    
+    // Получаем количество дней активности
+    const totalDaysStmt = db.prepare(`
+      SELECT COUNT(DISTINCT DATE(created_at)) as total_days
+      FROM user_progress
+      WHERE user_id = ?
+    `);
+    const totalDaysResult = totalDaysStmt.get(user.id);
+    
+    // Получаем общее количество идей
+    const totalIdeasStmt = db.prepare(`
+      SELECT COUNT(*) as total_ideas
+      FROM user_progress
+      WHERE user_id = ?
+    `);
+    const totalIdeasResult = totalIdeasStmt.get(user.id);
+    
+    return {
+      current_streak: user.current_streak || 0,
+      best_streak: user.best_streak || 0,
+      total_days: totalDaysResult.total_days || 0,
+      total_ideas: totalIdeasResult.total_ideas || 0
+    };
+  } catch (error) {
+    console.error('[ERROR] Ошибка при получении статистики пользователя:', error);
     return null;
   }
 };
@@ -1014,6 +1061,7 @@ module.exports = {
   getUserBadges,
   checkAndAwardBadges,
   getUserStreakInfo,
+  getUserStats,
   addSuggestedQuestion,
   // Административные функции
   getSystemStats,
@@ -1043,6 +1091,47 @@ module.exports = {
       return users.map(u => u.telegram_id);
     } catch (error) {
       console.error('[ERROR] getAllUserTelegramIds:', error);
+      return [];
+    }
+  },
+  // Функции для отслеживания блокировок
+  recordUserBlock: (telegramId) => {
+    try {
+      const now = new Date();
+      const date = now.toISOString().split('T')[0];
+      db.prepare('INSERT INTO user_blocks (telegram_id, blocked_at, date) VALUES (?, ?, ?)')
+        .run(telegramId, now.toISOString(), date);
+      console.log(`[БД] Записана блокировка пользователя ${telegramId}`);
+    } catch (error) {
+      console.error('[ERROR] recordUserBlock:', error);
+    }
+  },
+  getBlocksStatsByDays: (days = 30) => {
+    try {
+      const stats = [];
+      const today = new Date();
+      
+      for (let i = days - 1; i >= 0; i--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        
+        // Количество блокировок в этот день
+        const blocksCount = db.prepare(`
+          SELECT COUNT(*) as count 
+          FROM user_blocks 
+          WHERE date = ?
+        `).get(dateStr).count;
+        
+        stats.push({
+          date: dateStr,
+          blocksCount
+        });
+      }
+      
+      return stats;
+    } catch (error) {
+      console.error('[ERROR] getBlocksStatsByDays:', error);
       return [];
     }
   }

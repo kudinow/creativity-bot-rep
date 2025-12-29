@@ -96,6 +96,17 @@ app.get('/api/stats/daily', checkAuth, (req, res) => {
   }
 });
 
+app.get('/api/stats/blocks', checkAuth, (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const stats = db.getBlocksStatsByDays(days);
+    res.json(stats);
+  } catch (error) {
+    console.error('[ERROR] /api/stats/blocks:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.get('/api/questions/all', checkAuth, (req, res) => {
   try {
     const questions = db.getAllQuestionsWithUsage();
@@ -883,6 +894,10 @@ app.get('/', (req, res) => {
         <div class="chart-title">✅ Активные сегодня</div>
         <canvas id="activeUsersChart"></canvas>
       </div>
+      <div class="chart-card">
+        <div class="chart-title">🚫 Отписки по дням</div>
+        <canvas id="blocksChart"></canvas>
+      </div>
     </div>
 
     <div class="section">
@@ -1053,6 +1068,7 @@ app.get('/', (req, res) => {
     // Переменные для графиков
     let totalUsersChart = null;
     let activeUsersChart = null;
+    let blocksChart = null;
 
     // Загрузка и отрисовка графиков
     function loadCharts() {
@@ -1159,6 +1175,69 @@ app.get('/', (req, res) => {
               }
             }
           }
+        });
+
+        // График "Отписки по дням"
+        fetch('/api/stats/blocks?days=30', {
+          headers: {
+            'Authorization': 'Bearer ' + authToken
+          }
+        })
+        .then(response => response.json())
+        .then(blocksData => {
+          const blocksLabels = blocksData.map(d => {
+            const date = new Date(d.date);
+            return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+          });
+          const blocksCountData = blocksData.map(d => d.blocksCount);
+
+          const blocksCtx = document.getElementById('blocksChart').getContext('2d');
+          if (blocksChart) blocksChart.destroy();
+          blocksChart = new Chart(blocksCtx, {
+            type: 'bar',
+            data: {
+              labels: blocksLabels,
+              datasets: [{
+                label: 'Отписки',
+                data: blocksCountData,
+                backgroundColor: 'rgba(239, 68, 68, 0.6)',
+                borderColor: '#ef4444',
+                borderWidth: 1
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: true,
+              plugins: {
+                legend: {
+                  display: false
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    color: '#9ca3af',
+                    stepSize: 1
+                  },
+                  grid: {
+                    color: '#2d2d2d'
+                  }
+                },
+                x: {
+                  ticks: {
+                    color: '#9ca3af'
+                  },
+                  grid: {
+                    color: '#2d2d2d'
+                  }
+                }
+              }
+            }
+          });
+        })
+        .catch(error => {
+          console.error('Error loading blocks chart:', error);
         });
       })
       .catch(error => {

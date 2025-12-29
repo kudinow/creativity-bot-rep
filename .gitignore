@@ -15,6 +15,10 @@ database.db-shm
 database.db-wal
 # data/
 
+# Резервные копии
+backups/
+*.db.backup
+
 # Логи
 logs/
 *.log

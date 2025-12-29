@@ -28,4 +28,4 @@ ENV NODE_ENV=production
 ENV DB_PATH=/app/data/database.db
 
 # Команда запуска бота
-CMD ["node", "index.js"]
+CMD ["node", "src/index.js"]
