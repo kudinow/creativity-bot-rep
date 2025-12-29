@@ -914,6 +914,26 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   
+  // Проверяем возраст callback-запроса (Telegram хранит их максимум 48 часов)
+  // Если сообщение слишком старое, игнорируем его
+  const messageDate = query.message.date * 1000; // Конвертируем в миллисекунды
+  const now = Date.now();
+  const maxAge = 48 * 60 * 60 * 1000; // 48 часов в миллисекундах
+  
+  if (now - messageDate > maxAge) {
+    console.log(`[БОТ] Игнорируем устаревший callback_query от пользователя ${telegramId}`);
+    try {
+      await bot.answerCallbackQuery(query.id, {
+        text: 'Это сообщение устарело. Используй /start для получения актуального вопроса.',
+        show_alert: true
+      });
+    } catch (e) {
+      // Игнорируем ошибку, если не удалось ответить
+      console.log('[БОТ] Не удалось ответить на устаревший callback:', e.message);
+    }
+    return;
+  }
+  
   try {
     if (query.data === 'change_question') {
       const user = db.getUser(telegramId);
@@ -1236,10 +1256,15 @@ bot.on('callback_query', async (query) => {
     }
   } catch (error) {
     console.error('[ERROR] Ошибка при обработке callback_query:', error);
-    await bot.answerCallbackQuery(query.id, {
-      text: 'Произошла ошибка. Попробуйте ещё раз.',
-      show_alert: true
-    });
+    try {
+      await bot.answerCallbackQuery(query.id, {
+        text: 'Произошла ошибка. Попробуйте ещё раз.',
+        show_alert: true
+      });
+    } catch (answerError) {
+      // Игнорируем ошибки ответа на callback (например, если запрос устарел)
+      console.error('[ERROR] Не удалось ответить на callback_query:', answerError.message);
+    }
   }
 });
 
@@ -1406,7 +1431,20 @@ bot.on('message', async (msg) => {
 
 // Обработка ошибок polling
 bot.on('polling_error', (error) => {
-  console.error('[ERROR] Ошибка polling:', error);
+  console.error('[ERROR] Ошибка polling:', error.code, error.message);
+  // Не падаем при ошибках polling - бот продолжит работу
+});
+
+// Обработка необработанных промисов
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[ERROR] Необработанное отклонение промиса:', reason);
+  // Не падаем - продолжаем работу
+});
+
+// Обработка необработанных исключений
+process.on('uncaughtException', (error) => {
+  console.error('[ERROR] Необработанное исключение:', error);
+  // Не падаем - продолжаем работу
 });
 
 // Инициализация
