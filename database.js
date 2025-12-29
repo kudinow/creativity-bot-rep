@@ -1035,5 +1035,15 @@ module.exports = {
   getUsersStatsByDays,
   getAllQuestionsWithUsage,
   getUnusedQuestions,
-  getSuggestedQuestionsWithDetails
+  getSuggestedQuestionsWithDetails,
+  // Функции для рассылки
+  getAllUserTelegramIds: () => {
+    try {
+      const users = db.prepare('SELECT telegram_id FROM users').all();
+      return users.map(u => u.telegram_id);
+    } catch (error) {
+      console.error('[ERROR] getAllUserTelegramIds:', error);
+      return [];
+    }
+  }
 };

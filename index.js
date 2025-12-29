@@ -888,6 +888,36 @@ bot.onText(/\/admin_reset_today\s+(\d+)/, async (msg, match) => {
   }
 });
 
+// Состояние для ожидания текста рассылки
+const waitingForBroadcast = new Set();
+
+// Команда для начала рассылки
+bot.onText(/\/admin_broadcast/, async (msg) => {
+  const telegramId = msg.from.id;
+  
+  if (!isAdmin(telegramId)) {
+    await bot.sendMessage(telegramId, '❌ У вас нет прав для выполнения этой команды.');
+    return;
+  }
+  
+  try {
+    const totalUsers = db.getAllUserTelegramIds().length;
+    
+    waitingForBroadcast.add(telegramId);
+    await bot.sendMessage(
+      telegramId,
+      `📢 Рассылка сообщения всем пользователям\n\n` +
+      `Всего пользователей: ${totalUsers}\n\n` +
+      `Отправь следующим сообщением текст, который нужно разослать.\n` +
+      `Можно использовать Markdown форматирование.\n\n` +
+      `Для отмены отправь /cancel`
+    );
+  } catch (error) {
+    console.error('[ERROR] Ошибка при обработке /admin_broadcast:', error);
+    await bot.sendMessage(telegramId, '❌ Произошла ошибка.');
+  }
+});
+
 // Вспомогательная функция для склонения слова "день"
 const getDaysWord = (count) => {
   const lastDigit = count % 10;
@@ -1282,6 +1312,44 @@ bot.on('message', async (msg) => {
     
     if (!user) {
       await bot.sendMessage(telegramId, 'Сначала используй команду /start');
+      return;
+    }
+    
+    // Проверяем, ожидается ли рассылка от админа
+    if (waitingForBroadcast.has(telegramId)) {
+      waitingForBroadcast.delete(telegramId);
+      
+      const broadcastText = msg.text;
+      const userIds = db.getAllUserTelegramIds();
+      
+      await bot.sendMessage(
+        telegramId,
+        `📤 Начинаю рассылку...\n\nПользователей: ${userIds.length}`
+      );
+      
+      let successCount = 0;
+      let errorCount = 0;
+      
+      for (const userId of userIds) {
+        try {
+          await bot.sendMessage(userId, broadcastText, { parse_mode: 'Markdown' });
+          successCount++;
+          
+          // Небольшая задержка, чтобы не превысить лимиты Telegram API (30 сообщений в секунду)
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (error) {
+          errorCount++;
+          console.error(`[ERROR] Не удалось отправить сообщение пользователю ${userId}:`, error.message);
+        }
+      }
+      
+      await bot.sendMessage(
+        telegramId,
+        `✅ Рассылка завершена!\n\n` +
+        `✅ Успешно: ${successCount}\n` +
+        `❌ Ошибок: ${errorCount}`
+      );
+      
       return;
     }
     
