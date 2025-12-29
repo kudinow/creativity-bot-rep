@@ -103,7 +103,7 @@ const startScheduler = (bot, db) => {
             console.log(`[CRON] Пользователь ${user.telegram_id} заблокировал бота`);
             db.recordUserBlock(user.telegram_id);
           } else {
-            console.error(`[ERROR] Ошибка при отправке вопроса пользователю ${user.telegram_id}:`, error);
+          console.error(`[ERROR] Ошибка при отправке вопроса пользователю ${user.telegram_id}:`, error);
           }
         }
       }

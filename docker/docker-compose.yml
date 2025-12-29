@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
   creativity-bot:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
     container_name: creativity-bot
     restart: unless-stopped
@@ -20,9 +18,9 @@ services:
       - "${DASHBOARD_PORT:-3000}:${DASHBOARD_PORT:-3000}"
     volumes:
       # Монтируем директорию для сохранения базы данных между перезапусками
-      - ./data:/app/data
+      - ../data:/app/data
     env_file:
-      - ../.env
+      - .env
     logging:
       driver: "json-file"
       options:
